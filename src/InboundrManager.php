@@ -18,8 +18,10 @@ use Inboundr\Resources\Threads;
 /**
  * What the `Inboundr` facade calls. Facades forward method calls, and the
  * client exposes its resources as properties, so this turns `->emails` into
- * `emails()`. The client is built only when first used, so an app without an
- * API key can still receive webhooks.
+ * `emails()`. The client is resolved from the container on each call (it's a
+ * singleton there), so it is built only when first used, which lets an app
+ * without an API key still receive webhooks, and a rebound client (a fake in
+ * tests, a fresh one under Octane) is always the one used.
  */
 final class InboundrManager
 {
@@ -28,11 +30,9 @@ final class InboundrManager
     {
     }
 
-    private ?Inboundr $client = null;
-
     public function client(): Inboundr
     {
-        return $this->client ??= ($this->factory)();
+        return ($this->factory)();
     }
 
     public function emails(): Emails

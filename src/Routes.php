@@ -27,11 +27,26 @@ final class Routes
         'Illuminate\Foundation\Http\Middleware\VerifyCsrfToken',
     ];
 
-    public static function webhook(string $uri = 'inboundr/webhook'): RouteInstance
+    /**
+     * Session and cookie middleware from the `web` group. A delivery has no
+     * session, so running them would only write a session per email.
+     */
+    public const SESSION_MIDDLEWARE = [
+        'Illuminate\Cookie\Middleware\EncryptCookies',
+        'Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse',
+        'Illuminate\Session\Middleware\StartSession',
+        'Illuminate\View\Middleware\ShareErrorsFromSession',
+    ];
+
+    /**
+     * @param string|null $name Route name; pass a different one (or null) to
+     *        register more than one webhook route.
+     */
+    public static function webhook(string $uri = 'inboundr/webhook', ?string $name = 'inboundr.webhook'): RouteInstance
     {
-        return Route::post($uri, WebhookController::class)
+        $route = Route::post($uri, WebhookController::class)
             ->middleware(VerifyInboundrWebhook::class)
-            ->withoutMiddleware(self::CSRF_MIDDLEWARE)
-            ->name('inboundr.webhook');
+            ->withoutMiddleware([...self::CSRF_MIDDLEWARE, ...self::SESSION_MIDDLEWARE]);
+        return $name === null ? $route : $route->name($name);
     }
 }

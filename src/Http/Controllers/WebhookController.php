@@ -24,6 +24,9 @@ use Symfony\Component\HttpFoundation\Response;
  */
 final class WebhookController
 {
+    /** Seconds an attempt may run before a retry is allowed to start over. */
+    private const RUNNING_TTL = 300;
+
     public function __construct(
         private readonly Config $config,
         private readonly CacheFactory $cache,
@@ -46,15 +49,24 @@ final class WebhookController
         }
 
         // Only after verification, so an unsigned request can't claim an id.
-        $store = $this->cache->store($this->stringConfig('inboundr.webhook.cache_store'));
-        $key = $deliveryId === null ? null : "inboundr:delivery:$deliveryId";
-        if ($key !== null && $this->config->get('inboundr.webhook.dedupe', true)) {
-            $ttl = $this->config->get('inboundr.webhook.dedupe_ttl', 86400);
-            if (!$store->add($key, true, is_numeric($ttl) ? (int) $ttl : 86400)) {
+        // Test deliveries all share the id "test", so they aren't deduplicated.
+        $dedupe = $deliveryId !== null && $deliveryId !== 'test' && (bool) $this->config->get('inboundr.webhook.dedupe', true);
+        $store = $dedupe ? $this->cache->store($this->stringConfig('inboundr.webhook.cache_store')) : null;
+        $done = "inboundr:delivery:$deliveryId";
+        $running = "inboundr:delivery:$deliveryId:running";
+
+        if ($store !== null) {
+            if ($store->has($done)) {
                 return new Response('', 204);
             }
-        } else {
-            $key = null;
+            // A retry can arrive while the first attempt is still running (the
+            // platform gave up waiting). Answer 409 so it is retried later
+            // instead of counting as delivered. The marker expires on its own,
+            // so a request killed mid-way (timeout, out of memory) can't block
+            // the delivery for long.
+            if (!$store->add($running, true, self::RUNNING_TTL)) {
+                return new Response('Already being handled', 409);
+            }
         }
 
         try {
@@ -66,11 +78,15 @@ final class WebhookController
             }
             $this->events->dispatch(new InboundEmailReceived($email, $deliveryId, $event === null));
         } catch (\Throwable $e) {
-            // Let Inboundr's retry through: the delivery wasn't handled.
-            if ($key !== null) {
-                $store->forget($key);
-            }
+            // Not handled: let Inboundr's retry through.
+            $store?->forget($running);
             throw $e;
+        }
+
+        if ($store !== null) {
+            $ttl = $this->config->get('inboundr.webhook.dedupe_ttl', 86400);
+            $store->put($done, true, is_numeric($ttl) ? (int) $ttl : 86400);
+            $store->forget($running);
         }
 
         return new Response('', 204);

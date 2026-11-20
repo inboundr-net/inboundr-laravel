@@ -43,4 +43,23 @@ final class ContainerTest extends TestCase
         self::assertCount(1, $paths);
         self::assertFileExists((string) array_key_first($paths));
     }
+
+    public function testTheFacadeFollowsARebindingClient(): void
+    {
+        config()->set('inboundr.api_key', 'inb_x');
+        $first = InboundrFacade::client();
+        $fake = new Inboundr('inb_fake');
+        $this->app->instance(Inboundr::class, $fake);
+        self::assertNotSame($first, InboundrFacade::client());
+        self::assertSame($fake, InboundrFacade::client());
+    }
+
+    public function testASecondWebhookRouteCanHaveItsOwnName(): void
+    {
+        \Inboundr\Laravel\Routes::webhook('/hooks/inboundr', 'inboundr.webhook.legacy');
+        app('router')->getRoutes()->refreshNameLookups();
+        self::assertSame(url('/hooks/inboundr'), route('inboundr.webhook.legacy'));
+        self::assertSame(url('/inbound'), route('inboundr.webhook'));
+    }
 }
+

@@ -43,11 +43,22 @@ final class WebhookRouteTest extends TestCase
         self::assertNotNull($route);
         $middleware = app('router')->gatherRouteMiddleware($route);
 
-        $csrf = array_filter($middleware, static fn (mixed $m): bool => is_string($m)
-            && is_a(explode(':', $m)[0], \Illuminate\Foundation\Http\Middleware\PreventRequestForgery::class, true));
-        self::assertSame([], array_values($csrf), 'CSRF middleware still runs on the webhook route');
+        $named = static fn (array $classes): array => array_values(array_filter($middleware, static function (mixed $m) use ($classes): bool {
+            if (!is_string($m)) {
+                return false;
+            }
+            $class = explode(':', $m)[0];
+            foreach ($classes as $c) {
+                if (class_exists($c) && is_a($class, $c, true)) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+        // Every CSRF class across Laravel 12 and 13, not only 13's name.
+        self::assertSame([], $named(\Inboundr\Laravel\Routes::CSRF_MIDDLEWARE), 'CSRF middleware still runs on the webhook route');
+        self::assertSame([], $named(\Inboundr\Laravel\Routes::SESSION_MIDDLEWARE), 'session middleware still runs on the webhook route');
         self::assertContains(\Inboundr\Laravel\Http\Middleware\VerifyInboundrWebhook::class, $middleware);
-        self::assertNotEmpty(array_filter($middleware, static fn (mixed $m): bool => is_string($m) && str_contains($m, 'StartSession')), 'the route should still be in the web group');
     }
 
     public function testABadSignatureIs400AndFiresNothing(): void
@@ -75,7 +86,12 @@ final class WebhookRouteTest extends TestCase
     {
         Event::fake([InboundEmailReceived::class]);
         $body = self::body();
-        $this->deliver($body, ['x-inbound-signature' => self::sign($body), 'x-inbound-delivery-id' => 'del_legacy'])->assertNoContent();
+        $this->deliver($body, [
+            'x-inbound-signature' => self::sign($body),
+            'x-inbound-delivery-id' => 'del_legacy',
+            'x-inboundr-email-id' => self::EMAIL_ID,
+            'x-inboundr-id-signature' => self::signIds(deliveryId: 'del_legacy'),
+        ])->assertNoContent();
         Event::assertDispatched(InboundEmailReceived::class, fn (InboundEmailReceived $e): bool => $e->deliveryId === 'del_legacy');
     }
 
@@ -178,6 +194,103 @@ final class WebhookRouteTest extends TestCase
     {
         config()->set('inboundr.api_key', null);
         putenv('INBOUNDR_API_KEY');
+        Event::fake([InboundEmailReceived::class]);
+        $body = self::body();
+        $this->deliver($body, self::headersFor($body))->assertNoContent();
+        Event::assertDispatchedTimes(InboundEmailReceived::class, 1);
+    }
+
+    // --- delivery ids must be signed ---------------------------------------------------
+
+    public function testAReplayWithAForgedDeliveryIdIsRejected(): void
+    {
+        Event::fake([InboundEmailReceived::class]);
+        $body = self::body();
+        $this->deliver($body, self::headersFor($body))->assertNoContent();
+        // The captured delivery again, with a new delivery id to dodge dedupe.
+        $this->deliver($body, ['x-inboundr-delivery-id' => 'del_forged'] + self::headersFor($body))->assertStatus(400);
+        Event::assertDispatchedTimes(InboundEmailReceived::class, 1);
+    }
+
+    public function testAReplayWithoutTheIdSignatureIsRejected(): void
+    {
+        Event::fake([InboundEmailReceived::class]);
+        $body = self::body();
+        $this->deliver($body, ['x-inboundr-signature' => self::sign($body)])->assertStatus(400);
+        Event::assertNotDispatched(InboundEmailReceived::class);
+    }
+
+    public function testIdHeadersNamingAnotherEmailAreRejected(): void
+    {
+        Event::fake([InboundEmailReceived::class]);
+        $body = self::body();
+        $headers = [
+            'x-inboundr-signature' => self::sign($body),
+            'x-inboundr-delivery-id' => 'del_2',
+            'x-inboundr-email-id' => 'em_other',
+            'x-inboundr-id-signature' => self::signIds(deliveryId: 'del_2', emailId: 'em_other'),
+        ];
+        $this->deliver($body, $headers)->assertStatus(400);
+        Event::assertNotDispatched(InboundEmailReceived::class);
+    }
+
+    // --- dedupe that can't lose a delivery -------------------------------------------
+
+    public function testARetryWhileTheFirstAttemptIsRunningGets409(): void
+    {
+        $body = self::body();
+        $second = null;
+        Event::listen(InboundEmailReceived::class, function () use (&$second, $body): void {
+            // The platform retries while this attempt is still running.
+            $second ??= $this->deliver($body, self::headersFor($body))->getStatusCode();
+        });
+        $this->deliver($body, self::headersFor($body))->assertNoContent();
+        self::assertSame(409, $second);
+    }
+
+    public function testAnAttemptKilledMidWayDoesNotBlockTheRetryForADay(): void
+    {
+        // Faked first: Laravel keeps a route's controller between requests,
+        // with the dispatcher it was built with.
+        Event::fake([InboundEmailReceived::class]);
+        // A fatal error (timeout, out of memory) skips every catch: all that is
+        // left is the short-lived marker, never the 24h "handled" mark.
+        Cache::put('inboundr:delivery:' . self::DELIVERY_ID . ':running', true, 300);
+        self::assertFalse(Cache::has('inboundr:delivery:' . self::DELIVERY_ID));
+        $this->deliver(self::body(), self::headersFor(self::body()))->assertStatus(409);
+
+        $this->travel(301)->seconds();
+        $body = self::body();
+        $this->deliver($body, self::headersFor($body))->assertNoContent();
+        Event::assertDispatchedTimes(InboundEmailReceived::class, 1);
+    }
+
+    public function testHandledIsOnlyRecordedAfterTheListenerSucceeds(): void
+    {
+        $seenDuring = null;
+        Event::listen(InboundEmailReceived::class, function () use (&$seenDuring): void {
+            $seenDuring = Cache::has('inboundr:delivery:' . self::DELIVERY_ID);
+        });
+        $body = self::body();
+        $this->deliver($body, self::headersFor($body))->assertNoContent();
+        self::assertFalse($seenDuring);
+        self::assertTrue(Cache::has('inboundr:delivery:' . self::DELIVERY_ID));
+        self::assertFalse(Cache::has('inboundr:delivery:' . self::DELIVERY_ID . ':running'));
+    }
+
+    public function testTestDeliveriesAreNotDeduplicated(): void
+    {
+        Event::fake([InboundEmailReceived::class]);
+        $body = self::body();
+        $this->deliver($body, self::headersFor($body, 'test'))->assertNoContent();
+        $this->deliver($body, self::headersFor($body, 'test'))->assertNoContent();
+        Event::assertDispatchedTimes(InboundEmailReceived::class, 2);
+    }
+
+    public function testABrokenCacheStoreDoesNotMatterWhenDedupeIsOff(): void
+    {
+        config()->set('inboundr.webhook.dedupe', false);
+        config()->set('inboundr.webhook.cache_store', 'not-a-store');
         Event::fake([InboundEmailReceived::class]);
         $body = self::body();
         $this->deliver($body, self::headersFor($body))->assertNoContent();

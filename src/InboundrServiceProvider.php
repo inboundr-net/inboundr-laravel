@@ -42,8 +42,8 @@ final class InboundrServiceProvider extends ServiceProvider
 
         // Not static: Laravel binds macros to the router, and a static
         // closure can't be bound.
-        Route::macro('inboundrWebhook', function (string $uri = 'inboundr/webhook'): RouteInstance {
-            return Routes::webhook($uri);
+        Route::macro('inboundrWebhook', function (string $uri = 'inboundr/webhook', ?string $name = 'inboundr.webhook'): RouteInstance {
+            return Routes::webhook($uri, $name);
         });
     }
 }

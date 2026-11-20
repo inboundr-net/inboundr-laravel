@@ -16,7 +16,8 @@ use Symfony\Component\HttpFoundation\Response;
  *
  * - `inboundr.event`: the event array, when the body arrived;
  * - `inboundr.email_id`: the signed email id, when the host dropped the body;
- * - `inboundr.delivery_id`: the delivery id, for deduplication.
+ * - `inboundr.delivery_id`: the delivery id, checked against its signature,
+ *   for deduplication.
  *
  * Usable on your own route as `->middleware(VerifyInboundrWebhook::class)`.
  */
@@ -43,20 +44,31 @@ final class VerifyInboundrWebhook
 
         try {
             $event = Webhook::verify($request->getContent(), $request->headers, $secret, $tolerance);
-            $request->attributes->set(self::EVENT, $event);
         } catch (SignatureException $e) {
             if ($e->reason !== 'missing_body') {
                 return new Response('Invalid Inboundr signature', 400);
             }
-            try {
-                $ids = Webhook::verifyIds($request->headers, $secret, $tolerance);
-            } catch (SignatureException) {
-                return new Response('Invalid Inboundr signature', 400);
-            }
-            $request->attributes->set(self::EMAIL_ID, $ids->emailId);
+            $event = null;
         }
 
-        $request->attributes->set(self::DELIVERY_ID, Webhook::readHeaders($request->headers)->deliveryId);
+        // The body signature doesn't cover the delivery id, so a replayed
+        // delivery could carry any id and slip past deduplication. The id
+        // signature does: require it, and that it names the body's email.
+        try {
+            $ids = Webhook::verifyIds($request->headers, $secret, $tolerance);
+        } catch (SignatureException) {
+            return new Response('Invalid Inboundr signature', 400);
+        }
+        if ($event !== null && $ids->emailId !== $event['email']['id']) {
+            return new Response('Invalid Inboundr signature', 400);
+        }
+
+        if ($event !== null) {
+            $request->attributes->set(self::EVENT, $event);
+        } else {
+            $request->attributes->set(self::EMAIL_ID, $ids->emailId);
+        }
+        $request->attributes->set(self::DELIVERY_ID, $ids->deliveryId);
 
         return $next($request);
     }

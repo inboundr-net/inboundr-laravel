@@ -58,10 +58,10 @@ abstract class TestCase extends Orchestra
         return "t=$t,v1=" . hash_hmac('sha256', "$t.$body", $secret);
     }
 
-    protected static function signIds(?int $t = null): string
+    protected static function signIds(?int $t = null, string $deliveryId = self::DELIVERY_ID, string $emailId = self::EMAIL_ID): string
     {
         $t ??= time();
-        return "t=$t,v1=" . hash_hmac('sha256', "ids.$t." . self::DELIVERY_ID . '.' . self::EMAIL_ID, self::SECRET);
+        return "t=$t,v1=" . hash_hmac('sha256', "ids.$t.$deliveryId.$emailId", self::SECRET);
     }
 
     /**
@@ -90,7 +90,7 @@ abstract class TestCase extends Orchestra
             'x-inboundr-signature' => self::sign($body),
             'x-inboundr-delivery-id' => $deliveryId,
             'x-inboundr-email-id' => self::EMAIL_ID,
-            'x-inboundr-id-signature' => self::signIds(),
+            'x-inboundr-id-signature' => self::signIds(deliveryId: $deliveryId),
         ];
     }
 }
