@@ -1,0 +1,50 @@
+{
+    "name": "inboundr/inboundr-laravel",
+    "description": "Laravel integration for Inboundr: a verified webhook route that turns inbound email into events, and the API client from the container.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "email", "inbound-email", "webhook", "inboundr"],
+    "homepage": "https://inboundr.net",
+    "authors": [{ "name": "Inboundr", "email": "dev@inboundr.net" }],
+    "support": {
+        "issues": "https://github.com/inboundr-net/inboundr-laravel/issues",
+        "source": "https://github.com/inboundr-net/inboundr-laravel",
+        "docs": "https://inboundr.net/docs"
+    },
+    "require": {
+        "php": "^8.2",
+        "guzzlehttp/guzzle": "^7.8 || ^8.0",
+        "illuminate/cache": "^12.0 || ^13.0",
+        "illuminate/contracts": "^12.0 || ^13.0",
+        "illuminate/http": "^12.0 || ^13.0",
+        "illuminate/routing": "^12.0 || ^13.0",
+        "illuminate/support": "^12.0 || ^13.0",
+        "inboundr/inboundr": "^0.1"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.15",
+        "nyholm/psr7": "^1.8",
+        "orchestra/testbench": "^10.0 || ^11.0",
+        "phpunit/phpunit": "^11.5 || ^12.0"
+    },
+    "autoload": {
+        "psr-4": { "Inboundr\\Laravel\\": "src/" }
+    },
+    "autoload-dev": {
+        "psr-4": { "Inboundr\\Laravel\\Tests\\": "tests/" }
+    },
+    "extra": {
+        "laravel": {
+            "providers": ["Inboundr\\Laravel\\InboundrServiceProvider"],
+            "aliases": { "Inboundr": "Inboundr\\Laravel\\Facades\\Inboundr" }
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": { "php-http/discovery": false }
+    },
+    "scripts": {
+        "test": ["phpunit", "phpstan analyse --no-progress --memory-limit=1G"]
+    },
+    "minimum-stability": "stable"
+}

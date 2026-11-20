@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { laravel: "12", testbench: "10", php: "8.2" }
+          - { laravel: "12", testbench: "10", php: "8.3" }
+          - { laravel: "12", testbench: "10", php: "8.4" }
+          - { laravel: "12", testbench: "10", php: "8.5" }
+          - { laravel: "13", testbench: "11", php: "8.3" }
+          - { laravel: "13", testbench: "11", php: "8.4" }
+          - { laravel: "13", testbench: "11", php: "8.5" }
+          # The oldest versions composer.json allows.
+          - { laravel: "12", testbench: "10", php: "8.2", deps: lowest }
+    name: test (Laravel ${{ matrix.laravel }}, PHP ${{ matrix.php }}${{ matrix.deps == 'lowest' && ', lowest' || '' }})
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+      - run: |
+          composer require --no-interaction --no-update "illuminate/support:^${{ matrix.laravel }}.0"
+          composer require --dev --no-interaction --no-update "orchestra/testbench:^${{ matrix.testbench }}.0"
+      - run: composer update --no-interaction --no-progress --with-all-dependencies ${{ matrix.deps == 'lowest' && '--prefer-lowest --prefer-stable' || '' }}
+      - run: vendor/bin/phpunit
+      - run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
